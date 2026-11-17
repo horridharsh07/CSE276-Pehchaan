@@ -1,0 +1,55 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+*.log
+
+# ---- Node / JS ----
+node_modules/
+.next/
+out/
+dist/
+*.lock
+!package-lock.json
+
+# ---- Secrets & Config ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+backend/certs/
+Pehchaan/certs/
+
+# ---- ML Model weights (too large for git; download via script) ----
+models/face/*.onnx
+models/localization/*.pt
+training/*.pth
+*.onnx
+*.pt
+*.pth
+
+# ---- Data / outbox ----
+data/outbox/
+uploads/
+backend/uploads/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- IDE ----
+.vscode/
+.idea/
+*.swp
