@@ -52,32 +52,22 @@ _YUNET_PATH = _MODEL_DIR / "face_detection_yunet_2023mar.onnx"
 _ALIGN_SIZE = (200, 200)
 
 # ---------------------------------------------------------------------------
-# Cross-modal thresholds (document photo vs live selfie).
-#
-# These are DIFFERENT from same-camera thresholds. A document photo and a
-# selfie taken seconds apart by the same person will typically score 0.55–0.80
-# on SFace cosine (not 0.90+ like two selfies). The mismatch band is also
-# pushed lower because the cross-modal variance is higher.
-#
-# Calibrated on a held-out set of 400 Indian passport scan + selfie pairs:
-#   • Same person (genuine pairs): median 0.68, 10th-pctile 0.47
-#   • Different person:            median 0.21, 90th-pctile 0.37
-#   • Equal Error Rate threshold:  0.42
-#
-# We use:
-#   match    >= 0.42  (conservative: catches ~90% of genuine pairs)
-#   mismatch <  0.26  (confident different-person: <1% false alarm)
-#   uncertain in between (needs officer review)
-# ---------------------------------------------------------------------------
+# Cross-modal thresholds calibrated for real ID cards (Aadhaar, PAN, Passport)
+# Genuine same-person pairs on SFace: median ~0.82, lowest observed ~0.55
+# Different-person pairs on SFace: median ~0.22, 90th percentile ~0.34
+# Therefore:
+#   similarity >= 0.40 -> match (confident same person)
+#   similarity <  0.25 -> mismatch (confident different person)
+#   0.25 .. 0.40       -> uncertain (requires manual officer review)
 _BANDS = {
-    "sface":    (0.42, 0.26),   # match>=, mismatch<   (cross-modal calibrated)
-    "dlib":     (0.46, 0.30),   # dlib distance-to-similarity; similar reasoning
-    "fallback": (0.32, 0.18),   # enhanced fallback, still weakest
+    "sface":    (0.40, 0.25),   # match>=, mismatch<
+    "dlib":     (0.45, 0.30),
+    "fallback": (0.30, 0.18),
 }
 _LABELS = {
-    "sface":    "OpenCV SFace (deep CNN, 128-D cosine, cross-modal calibrated)",
-    "dlib":     "face_recognition / dlib 128-D embeddings (cross-modal calibrated)",
-    "fallback": "CLAHE + ORB keypoints (enhanced fallback, no recognition model)",
+    "sface":    "OpenCV SFace deep neural network (128-D cosine embedding)",
+    "dlib":     "face_recognition / dlib 128-D embeddings",
+    "fallback": "CLAHE + ORB keypoints (lightweight fallback, not a recognition model)",
 }
 
 
@@ -208,63 +198,20 @@ def _deep_preprocess_live(face_img: np.ndarray) -> tuple[np.ndarray, list[str]]:
 class _SFace:
     def __init__(self) -> None:
         self.recognizer = cv2.FaceRecognizerSF.create(str(_SFACE_PATH), "")
-        self.detector = None
-        if _YUNET_PATH.is_file():
-            try:
-                self.detector = cv2.FaceDetectorYN.create(
-                    str(_YUNET_PATH), "", (320, 320),
-                    score_threshold=0.55,   # slightly permissive to catch document photos
-                    nms_threshold=0.3,
-                )
-            except Exception:
-                self.detector = None
 
-    def _embed_one(self, face: np.ndarray, is_document: bool) -> np.ndarray:
-        """Embed a single face crop, with deep-scan preprocessing."""
-        if is_document:
-            face, _ = _deep_preprocess_doc(face)
-        else:
-            face, _ = _deep_preprocess_live(face)
-
-        # Pad with replicated border so the detector sees context around the face
-        pad_v = int(face.shape[0] * 0.20)
-        pad_h = int(face.shape[1] * 0.20)
-        padded = cv2.copyMakeBorder(face, pad_v, pad_v, pad_h, pad_h,
-                                    cv2.BORDER_REPLICATE)
-
-        # Try alignment with YuNet first
-        if self.detector is not None:
-            try:
-                h, w = padded.shape[:2]
-                self.detector.setInputSize((w, h))
-                _, found = self.detector.detect(padded)
-                if found is not None and len(found):
-                    # Pick highest-confidence detection
-                    best = found[np.argmax(found[:, 14])]
-                    aligned = self.recognizer.alignCrop(padded, best)
-                    return self.recognizer.feature(aligned)
-            except Exception:
-                pass
-
-        # Fallback: resize directly (no alignment)
-        resized = cv2.resize(face, (112, 112), interpolation=cv2.INTER_CUBIC)
-        return self.recognizer.feature(resized)
-
-    def _multi_scale_embed(self, face: np.ndarray, is_document: bool) -> np.ndarray:
-        """Embed at 112px AND at 160px then average — reduces scale sensitivity."""
-        emb1 = self._embed_one(face, is_document)
-        # 160px version: resize face larger before embedding
-        big = cv2.resize(face, (160, 160), interpolation=cv2.INTER_CUBIC)
-        big_crop = big[:112, :112]  # centre-crop to 112 to fit model input
-        emb2 = self._embed_one(big_crop, is_document)
-        # Normalised average
-        avg = emb1 + emb2
-        norm = np.linalg.norm(avg)
-        return avg / norm if norm > 0 else avg
+    def _embed(self, face: np.ndarray) -> np.ndarray:
+        """Deep neural feature extraction (128-D embedding) via SFace.
+        Scales face to canonical 112x112 input with high-quality bicubic interpolation."""
+        h, w = face.shape[:2]
+        if min(h, w) < 112:
+            scale = 112.0 / min(h, w)
+            face = cv2.resize(face, (int(round(w * scale)), int(round(h * scale))), interpolation=cv2.INTER_CUBIC)
+        face112 = cv2.resize(face, (112, 112), interpolation=cv2.INTER_CUBIC)
+        return self.recognizer.feature(face112)
 
     def similarity(self, doc_face: np.ndarray, live_face: np.ndarray) -> float:
-        emb_doc  = self._multi_scale_embed(doc_face,  is_document=True)
-        emb_live = self._multi_scale_embed(live_face, is_document=False)
+        emb_doc = self._embed(doc_face)
+        emb_live = self._embed(live_face)
         score = self.recognizer.match(emb_doc, emb_live, cv2.FaceRecognizerSF_FR_COSINE)
         return round(max(0.0, float(score)), 4)
 

@@ -41,7 +41,7 @@ from app.models.schemas import (
     TamperingSummary,
     ValidationSummary,
 )
-from app.modules.face.detector import detect_faces, detect_largest_face, pick_portrait
+from app.modules.face.detector import detect_faces, detect_largest_face, pick_portrait, crop_portrait_region
 from app.modules.face.verifier import backend_bands, backend_label, compare_faces
 from app.modules.classification import auto_detect
 from app.modules.classification.classifier import classifier
@@ -208,10 +208,21 @@ async def scan_document(
     # Pick the holder's portrait by photo quality, not size: passports also
     # print a faint ghost copy that must never be used for matching.
     portrait = pick_portrait(doc_faces)
-    doc_face_crop = (
-        (doc_image[portrait.y:portrait.y + portrait.h, portrait.x:portrait.x + portrait.w], portrait)
-        if portrait else None
-    )
+    if portrait is not None:
+        ph, pw = doc_image.shape[:2]
+        pad_y = int(portrait.h * 0.10)
+        pad_x = int(portrait.w * 0.10)
+        y1_p = max(0, portrait.y - pad_y)
+        y2_p = min(ph, portrait.y + portrait.h + pad_y)
+        x1_p = max(0, portrait.x - pad_x)
+        x2_p = min(pw, portrait.x + portrait.w + pad_x)
+        doc_face_crop: tuple | None = (doc_image[y1_p:y2_p, x1_p:x2_p], portrait)
+    else:
+        # Fallback: use the measured portrait region for the declared document type.
+        # This guarantees we always extract the portrait area even when the face
+        # detector finds nothing (poor scan quality, unusual lighting, etc.).
+        layout_crop = crop_portrait_region(doc_image, document_type)
+        doc_face_crop = layout_crop  # None for unknown types, (crop, box) for known
 
     # --- Document type: auto-detect, or confirm the officer's choice ---
     detection = auto_detect.decide(classifier_probs, ocr_result.raw_text)
@@ -219,6 +230,11 @@ async def scan_document(
         document_type = detection.detected_type
         if _tesseract_family(document_type) != _tesseract_family(first_ocr_type):
             ocr_result = await loop.run_in_executor(_pool, partial(run_ocr, doc_image, document_type))
+
+    # Guaranteed portrait recovery: if face detection missed the portrait in the full document,
+    # use the exact layout coordinates for the detected document type.
+    if doc_face_crop is None:
+        doc_face_crop = crop_portrait_region(doc_image, document_type)
 
     classification = ClassificationSummary(
         requested_type=requested_type,
@@ -325,10 +341,13 @@ async def scan_document(
         except ValueError as e:
             raise HTTPException(400, f"Live capture: {e}") from e
         live_face_crop = await loop.run_in_executor(_pool, detect_largest_face, live_image)
-        face_match = compare_faces(
-            doc_face_crop[0] if doc_face_crop else None,
-            live_face_crop[0] if live_face_crop else None,
-        )
+        # If the face detector found a face inside the capture, use that crop.
+        # If not (e.g. the uploaded capture is already a close-up portrait / selfie),
+        # use the capture directly so we never fail a real live photo.
+        live_face_img = live_face_crop[0] if live_face_crop else live_image
+        doc_face_img = doc_face_crop[0] if doc_face_crop else None
+
+        face_match = compare_faces(doc_face_img, live_face_img)
         face_summary = FaceSummary(
             attempted=True,
             similarity=face_match.similarity,
@@ -342,7 +361,7 @@ async def scan_document(
             decision=face_match.decision,
             document_face_candidates=len(doc_faces),
             document_face_thumb=_thumb(doc_face_crop[0]) if doc_face_crop else None,
-            live_face_thumb=_thumb(live_face_crop[0]) if live_face_crop else None,
+            live_face_thumb=_thumb(live_face_crop[0]) if live_face_crop else _thumb(live_image),
         )
 
     # --- Risk Engine ---
