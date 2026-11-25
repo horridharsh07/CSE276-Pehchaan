@@ -427,7 +427,7 @@ the gateway reaches the engine over mutual TLS. Steps and environment variables:
 [`mobile/`](mobile) is a thin Capacitor shell that opens the hosted dashboard full-screen,
 so it signs in with the same secure cookies as a browser and always shows the deployed
 version. Download the APK from the
-[releases page](https://github.com/ScholarlyAdeeb/Pehchaan/releases/latest); build notes
+[releases page](https://github.com/horridharsh07/CSE276-Pehchaan/releases/latest); build notes
 are in [mobile/README.md](mobile/README.md).
 
 ### Tests

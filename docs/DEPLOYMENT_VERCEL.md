@@ -13,7 +13,7 @@ network, which must run on a machine you control.
 | Fabric peer and orderer | A VM or the checkpoint machine | Long-running nodes with a ledger on disk. |
 
 Status: the dashboard and gateway are deployed at
-https://tumharipehchaan.vercel.app (health and sign-in endpoints answer).
+https://cse276-pehchaan.vercel.app (health and sign-in endpoints answer).
 Scans from that site need the engine of step 1 to be running and reachable.
 
 ## 1. Engine host

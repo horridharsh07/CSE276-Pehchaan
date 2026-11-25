@@ -9,7 +9,7 @@ a browser. If the server cannot be reached it shows `www/offline.html`.
 | Setting | Value |
 |---|---|
 | Application id | `in.gov.pehchaan.app` |
-| Server | `https://tumharipehchaan.vercel.app` |
+| Server | `https://cse276-pehchaan.vercel.app` |
 | Permissions | Internet, camera (document capture and live photo) |
 | Minimum Android | 7.0 (API 24) |
 
